@@ -1,0 +1,546 @@
+---
+title: "Geo-data and methods in R"
+author: "	1056495"
+date: "2023-02-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# The Set Up (of code)
+
+## Set up 1: making a species distribution map
+###Packages
+```{r packages, results='hide', warning=FALSE, message=FALSE}
+	#install.packages('dismo')  
+	#install.packages('rworldmap')
+	#install.packages('sf')
+	#install.packages('geodata')
+	
+library(dismo)
+library(rworldmap)
+library(sf)
+library(geodata)
+library(raster)
+library(scales)
+library(rgdal)
+library(rgeos)
+library(sp)
+```
+
+```{r plotting world map}
+	wrld_simpl<-getMap(resolution = "coarse")
+	plot(wrld_simpl)
+```
+
+```{r choosing my species, echo = FALSE, results='hide', warning=FALSE, message=FALSE}
+Yucca_Moth.gbif <- gbif("Tegeticula","yuccasella", geo=TRUE) 
+
+Yucca_plant.gbif <- gbif("yucca", "glauca", geo = TRUE)
+```
+```{r getting the latitude and longitude values, echo = FALSE}
+Yucca_moth.coords<-cbind(Yucca_Moth.gbif$lon,Yucca_Moth.gbif$lat) 
+Yucca_plant.coords<-cbind(Yucca_plant.gbif$lon,Yucca_plant.gbif$lat) 
+```
+```{r removing nas, hide = TRUE, echo=FALSE}
+Yucca_moth.coords<-na.omit(Yucca_moth.coords) 
+Yucca_moth.coords<-data.frame(Yucca_moth.coords)
+colnames(Yucca_moth.coords)<-c("lon","lat")
+	
+Yucca_plant.coords<-na.omit(Yucca_plant.coords) 
+Yucca_plant.coords<-data.frame(Yucca_plant.coords)
+colnames(Yucca_plant.coords)<-c("lon","lat")
+```
+```{r plotting species distribution, echo= FALSE}
+
+plot(wrld_simpl, xlim=range(Yucca_moth.coords$lon), ylim=range(Yucca_moth.coords$lat), axes=TRUE, col="#FFF4D7")
+points(Yucca_moth.coords, col='#ff0660', cex=0.75)
+
+plot(wrld_simpl, xlim=range(Yucca_plant.coords$lon), ylim=range(Yucca_plant.coords$lat), axes=TRUE, col="#FFF4D7")
+	points(Yucca_plant.coords, col='#06FFA5', cex=0.75, pch = 19)
+```
+
+```{r trimming the coordinates, echo = FALSE}
+trim.coords<-function (x,latmin,latmax,lonmin,lonmax) {
+if (sum(x$lon < lonmin)>0) {
+			tmp<-which(x$lon < lonmin)
+			x<-x[-tmp,]}
+				if (sum(x$lon > lonmax)>0) {
+				tmp<-which(x$lon > lonmax)
+				x<-x[-tmp,]}
+					if (sum(x$lat < latmin)>0) {
+					tmp<-which(x$lat < latmin)
+					x<-x[-tmp,]}
+						if (sum(x$lat > latmax)>0) {
+						tmp<-which(x$lat > latmax)
+						x<-x[-tmp,]}
+				return(x)}
+
+```
+```{r checking the changed coordinates, echo=FALSE, results='hide'}
+Yucca_plant.coords.trim<-trim.coords(Yucca_plant.coords,latmin=10,latmax= 65,lonmin= -125,lonmax= -70)
+#plot(wrld_simpl, xlim=range(Yucca_plant.coords.trim$lon), ylim=range(Yucca_plant.coords.trim$lat), axes=TRUE, col="lightyellow")
+#points(Yucca_plant.coords.trim, col='#06FFA5', cex=0.75)
+
+new.Yucca_plant.coords<- Yucca_plant.coords.trim
+```
+
+```{r plotttt, echo=FALSE}
+par(mfrow = c(1,2))
+plot(wrld_simpl, xlim=range(Yucca_moth.coords$lon), ylim=range(Yucca_moth.coords$lat), axes=TRUE, col="light yellow")
+points(Yucca_moth.coords, col='#ff0660', cex=0.75)
+
+plot(wrld_simpl, xlim=range(new.Yucca_plant.coords$lon), ylim=range(new.Yucca_plant.coords$lat), axes=TRUE, col="light yellow")
+	points(new.Yucca_plant.coords, col='#06FFA5', cex=0.75)
+```
+Here, lies the new coordinates of the species' distribution map after trimming the coordinates. There was 1 population of Yucca Glauca in Sweden that was trimmed. Now both maps show similar areas of where the plants ditributions are. 
+
+## Set up 2: Extract climatic values for the localities occupied by the species
+```{r echo=FALSE}
+bio.data<-worldclim_global(var="bio",res=10,path=getwd())
+	names(bio.data)<-paste0("bio",1:19)
+plot(bio.data,1)
+plot(bio.data,2)
+#---
+# bioclimatic data for Species 1 and Species 2
+bio.values_ymoth <- extract(bio.data, Yucca_moth.coords)[,-1] 
+rownames(bio.values_ymoth)<-rownames(Yucca_moth.coords)
+
+bio.values_yplant <- extract(bio.data, new.Yucca_plant.coords)[,-1] 
+rownames(bio.values_yplant)<-rownames(new.Yucca_plant.coords)
+```
+
+```{r making data, echo=FALSE, results='hide'}
+yucca_moth_data<-cbind(Yucca_moth.coords,bio.values_ymoth) 
+yucca_moth_data<-na.omit(yucca_moth_data)
+#write.csv(yucca_moth_data,file="file/to/path/yucca_moth_data.csv")
+
+yucca_plant_data<-cbind(new.Yucca_plant.coords,bio.values_yplant) 
+yucca_plant_data<-na.omit(yucca_plant_data)
+#write.csv(yucca_plant_data,file="file/to/path/yucca_plant_data.csv")
+```
+
+## Set up 3: Preparation for linear models
+```{r}
+pairs(bio.values_ymoth[,1:5])
+pairs(bio.values_yplant[,1:5])
+
+#BIO1 = Annual Mean Temperature
+#BIO2 = Mean Diurnal Range (Mean of monthly (max temp - min temp))
+#BIO3 = Isothermality (BIO2/BIO7) (×100)
+#BIO4 = Temperature Seasonality (standard deviation ×100)
+#BIO5 = Max Temperature of Warmest Month
+```
+```{r}
+pairs(bio.values_ymoth[,6:10])
+pairs(bio.values_yplant[,6:10])
+
+#BIO6 = Min Temperature of Coldest Month
+#BIO7 = Temperature Annual Range (BIO5-BIO6)
+#BIO8 = Mean Temperature of Wettest Quarter
+#BIO9 = Mean Temperature of Driest Quarter
+#BIO10 = Mean Temperature of Warmest Quarter
+```
+```{r gathering mean, minium and maximum values, echo=FALSE, results='hide'}
+rbind(mean=colMeans(yucca_moth_data),
+	min=apply(yucca_moth_data, 2, min),
+	max=apply(yucca_moth_data, 2, max))
+
+rbind(mean=colMeans(yucca_plant_data),
+	min=apply(yucca_plant_data, 2, min),
+	max=apply(yucca_plant_data, 2, max))
+```
+```{r, echo=FALSE, results='hide'}
+ext <- extent(wrld_simpl)
+xy <- abs(apply(as.matrix(bbox(ext)), 1, diff))
+n <- 5
+r <- raster(ext, ncol=xy[1]*n, nrow=xy[2]*n)
+mask <-rasterize(wrld_simpl, r)
+
+e <- extent(-125, -70, 25, 55)
+bg1 <- randomPoints(mask, 500, ext=e,extf=1)
+colnames(bg1)<-c("lon","lat")
+
+plot(mask, axes = TRUE, col = "lightgrey", main = "The distribution of Tegeticula Yuccasella against background points", 
+     xlim = c(-125, -70),
+     ylim = c(25, 55)); box()
+points(Yucca_moth.coords,col = "#ff0660", pch = 20, cex = 1)
+plot(e, add=TRUE, col='black')
+points(bg1,col="black", pch=20)
+
+plot(mask, axes = TRUE, col = "lightgrey", main = "The distribution of Yucca Glauca against background points",
+     xlim = c(-125, -70),
+     ylim = c(25, 55)); box()
+points(Yucca_plant.coords,col = "#06FFA5", pch = 20, cex = 1)
+
+plot(e, add=TRUE, col='black')
+
+bg2 <- randomPoints(mask, 500, ext=e,extf=1)
+points(bg2,col="black", pch=20)
+colnames(bg2)<-c("lon","lat")
+
+#the black points are the background points with no recorded presence in GBIF
+#the pink/green points are the observed localities
+bio.data<-crop(bio.data,e)
+ #tip: needs to be in the same chunk or it wont work
+```
+```{r, set up, echo=FALSE}
+train_ym <- rbind(Yucca_moth.coords, bg1) 
+train_yp <- rbind(new.Yucca_plant.coords, bg2)
+
+pb_train_ym <- c(rep(1, nrow(Yucca_moth.coords)), rep(0, nrow(bg1))) 
+pb_train_yp <- c(rep(1, nrow(new.Yucca_plant.coords)), rep(0, nrow(bg2))) 
+
+envtrain_ym <- extract(bio.data, train_ym) 
+envtrain_ym <- data.frame(cbind(pa1=pb_train_ym, envtrain_ym))
+
+envtrain_yp <- extract(bio.data, train_yp) 
+envtrain_yp <- data.frame(cbind(pa2=pb_train_yp, envtrain_yp))
+
+testpres1 <- data.frame( extract(bio.data, Yucca_moth.coords) ) 
+testbackg1 <- data.frame( extract(bio.data, bg1)) 
+
+testpres2 <- data.frame( extract(bio.data, new.Yucca_plant.coords) ) 
+testbackg2 <- data.frame( extract(bio.data, bg2)) 
+
+```
+
+# Question 1: Run linear models to predict the present-day distribution of species 1 using climate variables and use them to present a map of its current distribution. Which set of climatic variables best explain the current distribution of the species?
+
+```{r}
+plot(mask, axes = TRUE, col = "lightgrey",main = "The distribution of Tegeticula Yuccasella against background points",
+     xlim = c(-125, -70),
+     ylim = c(25, 55)); box()
+points(Yucca_moth.coords,col = "#ff0660", pch = 20, cex = 1)
+
+plot(e, add=TRUE, col='black')
+points(bg1,col="black", pch=20)
+```
+## Linear model
+```{r linear model}
+gm1_5 <- glm(pa1 ~ bio1 + bio2 + bio3 + bio4 + bio5, 
+     family = binomial(link = "logit"), data=envtrain_ym)
+summary(gm1_5)
+```
+The linear model conducted above suggests that the bioclimatic variables that are significant are BIO 2, 4 and 5 (Mean Diurnal Range (Mean of monthly (max temp - min temp)), Temperature Seasonality (standard deviation ×100) and Max Temperature of Warmest Month))
+## Predict species distribution from the model and plot it
+```{r BIO 1-5 plots, echo=FALSE}
+pg1_5 <- predict(bio.data, gm1_5, ext=e,type="response") 
+pg1_5<-crop(pg1_5,e)
+
+ge1_5 <- evaluate(testpres1, testbackg1, gm1_5) 
+ge1_5
+
+tr1_5 <- threshold(ge1_5, 'prevalence') 
+#code above: set up to evaluate how well the model can predict where there will be presence of the yucca moth or not. 
+
+plot(pg1_5, main='GLM probability of occurrence of species 1 associated via BIO1-5')
+plot(wrld_simpl, add=TRUE, border='dark grey') 
+points(Yucca_moth.coords,col = "#660226", pch = 4, cex = 0.5)
+
+#colours: #660226 is a shade of #ff0660
+
+
+plot(pg1_5 > tr1_5, main='presence/absence of Species 1 (1-5)')
+plot(wrld_simpl, add=TRUE, border='dark grey') 
+points(Yucca_moth.coords,col = "#660226", pch = 4, cex = 0.5)
+```
+The evaluation shows that the linear model (gm1_5) is 35% correct when predicting the presence and absence of Yucca moth populations. To improve the model, i will use the varaibles that were found to have an significant impact on the presence and absence of the Yucca moth population. 
+
+```{r lm bioclimate variables 6 - 10}
+gm1_10 <- glm(pa1 ~ bio6 + bio7 + bio8 + bio9 + bio10, 
+     family = binomial(link = "logit"), data=envtrain_ym)
+summary(gm1_10)
+```
+The linear model conducted above suggests that the bioclimatic variables that are significant are BIO 6, 7, 9 and 10. 
+(Min Temperature of Coldest Month, Temperature Annual Range (BIO5-BIO6), Mean Temperature of Driest Quarter and Mean Temperature of Warmest Quarter)
+
+```{r BIO 6 - 10 plots, echo=FALSE}
+pg1_10 <- predict(bio.data, gm1_10, ext=e,type="response") 
+pg1_10<-crop(pg1_10,e)
+ge1_10 <- evaluate(testpres1, testbackg1, gm1_10) 
+ge1_10
+tr1_10 <- threshold(ge1_10, 'prevalence') 
+
+#colours: #660226 is a shade of #ff0660
+#use this evaluation to pick a threshold probability for defining presence/absence
+#using the model that gives the most accurate match to observed presence/absence
+
+#par(mfrow = c(1,2))
+plot(pg1_10, main='GLM probability of occurrence of BIO6-10 on species 1')
+plot(wrld_simpl, add=TRUE, border='dark grey') 
+points(Yucca_moth.coords,col = "#660226", pch = 4, cex = 0.5)
+
+plot(pg1_10 > tr1_10, main='presence/absence of species 1 (6-10)')
+plot(wrld_simpl, add=TRUE, border='dark grey') 
+points(Yucca_moth.coords,col = "#660226", pch = 4, cex = 0.5)
+```
+The evaluation shows that the linear model (gm1_10) is 27.5% correct when predicting the presence and absence of Yucca moth populations. To improve the model, i will use the variables that were found to have an significant impact on the presence and absence of the Yucca moth population. These were variables 2,4,5,6,7,9 and 10
+```{r eval }
+AIC(gm1_5,gm1_10)
+evaluate(testpres1, testbackg1, gm1_5)
+evaluate(testpres1, testbackg1, gm1_10)
+```
+```{r all plots together now}
+par(mfrow = c(2,2))
+plot(pg1_5, main='GLM probability of occurrence of species 1 associated via BIO1-5')
+plot(wrld_simpl, add=TRUE, border='dark grey') 
+points(Yucca_moth.coords,col = "#660226", pch = 4, cex = 0.5)
+
+plot(pg1_5 > tr1_5, main='presence/absence of Species 1 (1-5)')
+plot(wrld_simpl, add=TRUE, border='dark grey') 
+points(Yucca_moth.coords,col = "#660226", pch = 4, cex = 0.5)
+
+plot(pg1_10, main='GLM probability of occurrence of BIO6-10 on species 1')
+plot(wrld_simpl, add=TRUE, border='dark grey') 
+points(Yucca_moth.coords,col = "#660226", pch = 4, cex = 0.5)
+
+plot(pg1_10 > tr1_10, main='presence/absence species 1 (6-10)')
+plot(wrld_simpl, add=TRUE, border='dark grey') 
+points(Yucca_moth.coords,col = "#660226", pch = 4, cex = 0.5)
+```
+
+## Making a better prediction using linear models 
+### Climate variables 1 -5
+```{r bioclimate variable loop (1)}
+gm1_5_2 <- glm(pa1 ~   bio4 + bio5+ bio6 + bio7 + bio9 +bio10,
+     family = binomial(link = "logit"), data=envtrain_ym)
+summary(gm1_5_2)
+evaluate(testpres1, testbackg1, gm1_5_2)
+AIC(gm1_5_2, gm1_5, gm1_10)
+```
+These are all the variables that suggested a significant relationship. When i use the variables that had the highest p value (bio 7 and 10), the evaluation statistics show that the model is only 20%. When i use all the varaibles that were significant (bio 4,5,7,9,10), the model is 35% correct. AIC statistics suggest that the model gm1_5 is the best to use (802.7771)
+
+# Question 2: Run linear models to predict the present-day distribution of species 2 using climate variables and use them to present maps of its current distribution. Which set of climatic variables best explain the current distribution of the species?
+```{r Species 2 distribution with random background points, echo=FALSE }
+plot(mask, axes = TRUE, col = "lightgrey", main = "The distribution of Yucca Glauca against background points",
+     xlim = c(-125, -70),
+     ylim = c(25, 55)); box()
+points(new.Yucca_plant.coords,col = "#06FFA5", pch = 20, cex = 1)
+
+plot(e, add=TRUE, col='black')
+points(bg2,col="black", pch=20)
+
+#has to be in the same chunk or wont work
+```
+```{r linear model for BIO1-5}
+gm2_5 <- glm(pa2 ~  bio1 + bio2 + bio3 + bio4 + bio5,
+     family = binomial(link = "logit"), data=envtrain_yp)
+summary(gm2_5)
+```
+The linear model conducted above suggests that the bioclimatic variables that are significant are BIO 2, 3, and 4 in affcting the population of Yucca Glauca (the yucca plant). 
+
+## Predict species distribution from the model and plot it
+```{r plots BIO 1-5, echo=FALSE}
+pg2_5 <- predict(bio.data, gm2_5, ext=e,type="response") 
+pg2_5<-crop(pg2_5,e)
+
+ge2_5 <- evaluate(testpres2, testbackg2, gm2_5) 
+ge2_5
+
+tr2_5 <- threshold(ge2_5, 'prevalence') 
+
+
+#colours: #014c31 is a shade of #06ffa5
+#use this evaluation to pick a threshold probability for defining presence/absence
+#using the model that gives the most accurate match to observed presence/absence
+
+
+plot(pg2_5, main='GLM probability of occurrence of species 2 (BIO 1-5)')
+plot(wrld_simpl, add=TRUE, border='darkgrey')
+points(new.Yucca_plant.coords,col = "#014c31", pch = 4, cex = 0.5)
+
+tr2_5 <- threshold(ge2_5, 'prevalence')
+plot(pg2_5 > tr2_5, main='presence/absence of species 2 (BIO 6-10)') 
+plot(wrld_simpl, add=TRUE, border='darkgrey') 
+points(new.Yucca_plant.coords,col = "#014c31", pch = 4, cex = 0.5)
+```
+The evaluation shows that the linear model (gm2_5) is  56% correct when predicting the presence and absence of Yucca plant populations. To improve the model, i will use the variables that were found to have an significant impact on the presence and absence of the Yucca plant population.
+```{r lm BIO 6 - 10}
+gm2_10 <- glm(pa2 ~ bio6 + bio7 + bio8 + bio9 + bio10, 
+     family = binomial(link = "logit"), data=envtrain_yp)
+summary(gm2_10)
+```
+All of the bioclimatic variables seem to be a good indicator for the presence and absence of the yucca plant populations 
+```{r Plots for BIO 6 - 10, echo=FALSE}
+pg2_10 <- predict(bio.data, gm2_10, ext=e,type="response") 
+pg2_10<-crop(pg2_10,e)
+ge2_10 <- evaluate(testpres2, testbackg2, gm2_10)
+ge2_10
+tr2_10 <- threshold(ge2_10, 'prevalence')
+
+
+#representing the probability of occurrence from our linear model, for or area of extent e
+
+
+#colours: #014c31 is a shade of ##06ffa5
+#use this evaluation to pick a threshold probability for defining presence/absence
+#using the model that gives the most accurate match to observed presence/absence
+
+plot(pg2_10, main='GLM probability of occurrence of species 2 (BIO6-10)')
+plot(wrld_simpl, add=TRUE, border = 'darkgrey')
+points(new.Yucca_plant.coords,col = "#014c31", pch = 4, cex = 0.5)
+
+plot(pg2_10 > tr2_10, main='presence/absence of species 2 (BIO 6-10)')
+plot(wrld_simpl, add=TRUE, border = 'darkgrey')
+points(new.Yucca_plant.coords,col = "#014c31", pch = 4, cex =0.5) 
+```
+The evaluation shows that the linear model (gm2_10) is  65% correct when predicting the presence and absence of Yucca plant populations. To improve the model, i will use the variables that were found to have an significant impact on the presence and absence of the Yucca plant population. The linear model (gm_10) is the best for predicting. 
+```{r evaluation of species 2}
+AIC(gm2_5,gm2_10)
+evaluate(testpres2, testbackg2, gm2_5)
+evaluate(testpres2, testbackg2, gm2_10)
+```
+```{r all the plots together now }
+par(mfrow = c(2,2))
+plot(pg2_5, main='GLM probability of occurrence of species 2 (BIO 1-5)')
+plot(wrld_simpl, add=TRUE, border='darkgrey')
+points(new.Yucca_plant.coords,col = "#014c31", pch = 4, cex = 0.5)
+
+plot(pg2_5 > tr2_5, main='presence/absence of species 2 (BIO 1-5)') 
+plot(wrld_simpl, add=TRUE, border='darkgrey') 
+points(new.Yucca_plant.coords,col = "#014c31", pch = 4, cex = 0.5)
+
+plot(pg2_10, main='GLM probability of occurrence of species 2 (BIO6-10)')
+plot(wrld_simpl, add=TRUE, border = 'darkgrey')
+points(new.Yucca_plant.coords,col = "#014c31", pch = 4, cex = 0.5)
+
+plot(pg2_10 > tr2_10, main='presence/absence of species 2 (BIO 6-10)')
+plot(wrld_simpl, add=TRUE, border = 'darkgrey')
+points(new.Yucca_plant.coords,col = "#014c31", pch = 4, cex =0.5) 
+```
+# Question 3: Plot the overlap in distribution of the two species. Devise and calculate a metric for the degree of overlap between their ranges, explaining how you calculated it.
+```{r plot of overlap in distribution}
+plot(mask, axes = TRUE, col = "lightyellow", main = "Distrubutions of Tegeticula yuccasella and Yucca glauca",
+     xlim = c(-125, -70),
+     ylim = c(25, 55)); box()
+points(Yucca_moth.coords,col = alpha("#ff0660", 0.7), pch = 20, cex = 1)
+points(new.Yucca_plant.coords, col = alpha("#06FFA5", 0.2), pch = 20, cex = 1)
+
+```
+
+```{r variables already made that can be used, echo=FALSE, results='hide'}
+yucca_moth_coords_matrix <-data.matrix(Yucca_moth.coords)
+yucca_plant_coords_matrix <-data.matrix(new.Yucca_plant.coords)
+
+```
+```{r}
+Yucca_moth_pts <- st_multipoint(yucca_moth_coords_matrix)
+
+yucca_moth_polygon <- st_triangulate(Yucca_moth_pts, bOnlyEdges = FALSE)
+
+plot(yucca_moth_polygon, col = '#ff0660', border = 'pink') #06FFA5 #e6fff6
+
+
+Yucca_plant_pts <- st_multipoint(yucca_plant_coords_matrix)
+
+yucca_plant_polygon <- st_triangulate(Yucca_plant_pts, bOnlyEdges = FALSE)
+
+plot(yucca_plant_polygon, col = '#06FFA5', border = '#e6fff6') #ff0660
+
+
+```
+Here above shows a polygon that depicts the spatial area that the populations create. 
+```{r}
+st_area(yucca_moth_polygon)
+st_area(yucca_plant_polygon)
+
+st_is_valid(yucca_moth_polygon)
+st_is_valid(yucca_plant_polygon)
+#moth_plant_intersection <- st_intersection(yucca_moth_polygon, yucca_plant_polygon)
+
+
+```
+My code did not enable me to finish with my question on the overlap of the polygons. I have worked out teh area that the population make up but I wasn't able to find that area of intersection due to some unknown formatting area. I have checked of the polygons are valid and they are, so i wasn't able to continue. 
+
+# Question 4: Use a linear model to test whether the distribution of species 1 at the present time depends on the distribution of species 2, while also taking account of the effects of climatic variables. 
+
+This question also wasn't answered. I had no way of combining the tables so that pa1 and pa2 were in the same table to then conduct this analysis. I would predict that the two species had an significant relationship since the two species (yucca moth and yucca plant) are an infamous mutualism relationship. It is also shown on the map with both distributions are overlapping. 
+
+```{r, hide =TRUE}
+#gm <- glm(pa1 ~  pa2,
+          #family = binomial(link = "logit"), data= envtrain_yp, data = envtrain_ym)
+
+
+
+```
+```{r hide = TRUE}
+#ym_data <- read.csv("file/path/yucca_moth_data.csv")
+#yp_data <- read.csv("file/path//yucca_plant_data.csv")
+
+
+#Species1 <- "Tegeticula yuccasella"
+#Species2 <- "Yucca glauca"
+#ym_data$Species <- c(rep(Species1, (nrow(ym_data))))
+#yp_data$Species <- c(rep(Species2, (nrow(yp_data))))
+
+#ym_data$BG <- rbind(bg1)
+
+#both_species <- rbind(ym_data, yp_data)
+
+
+#both_species_env <- cbind(pb_train_ym, pb_train_yp)
+
+
+
+
+```
+# Question 5: Predict the future distribution of each species using CMIP6 data for future climate and predict how the degree of overlap in ranges change will change in that time. Do you expect the two species to co-occur more often or less often than at the present?
+
+```{r}
+future.bio.data<-cmip6_world(model="CanESM5",var="bio",ssp="245",res=10,time="2061-2080",path=getwd())
+names(future.bio.data)<-names(bio.data)
+future.bio.data<-crop(future.bio.data,e)
+
+plot(pg1_5, main='A) GLM present')
+	plot(wrld_simpl, add=TRUE, border='dark grey') 
+	points(Yucca_moth.coords,col = "#660226", pch = 4, cex = 0.5)
+	
+pg1_5.future <- predict(future.bio.data, gm1_5, ext=e,type="response") #gm and pg change depending what we think is best 
+
+pg1_5.future<-crop(pg1_5.future,e)
+	plot(pg1_5.future, main="B) GLM, 2060-2081")
+	plot(wrld_simpl, add=TRUE, border='dark grey') 
+	points(Yucca_moth.coords,col = "#660226", pch = 4, cex = 0.5)
+	
+#--- ----- ------ ---- ---  -- 
+	
+plot(pg2_10, main='A) GLM present')
+	plot(wrld_simpl, add=TRUE, border='dark grey') 
+	points(new.Yucca_plant.coords,col = "#014c31", pch = 4, cex = 0.5)
+	
+pg2_10.future <- predict(future.bio.data, gm2_10, ext=e,type="response") #gm and pg change depending what we think is best 
+
+pg2_10.future<-crop(pg2_10.future,e)
+	plot(pg2_10.future, main="B) GLM, 2060-2081")
+	plot(wrld_simpl, add=TRUE, border='dark grey') 
+	points(new.Yucca_plant.coords,col = "#014c31", pch = 4, cex = 0.5)
+```
+Interesting, the data is showing that in 2060 - 2081, there will be improvement in the conditions for both teh yucca moth and yucca plant since there is more area that is green. 
+```{r}
+predict.YM.localities.now <- extract(pg1_5>=tr1_5, Yucca_moth.coords)[,-1]
+sum(predict.YM.localities.now)
+
+predict.YP.localities.now <- extract(pg2_10>=tr2_10, new.Yucca_plant.coords)[,-1]
+predict.YP.localities.now1 <- na.omit(predict.YP.localities.now)
+sum(predict.YP.localities.now1)
+
+#--- --- -- -- - - - - - -- -- - -- -- - - - ---- ---- -- --- --- ---
+
+predict.YM.localities.future <- extract(pg1_5.future>=tr1_5, Yucca_moth.coords)[,-1]
+predict.YM.localities.future1 <- na.omit(predict.YM.localities.future)
+sum(predict.YM.localities.future1)
+
+predict.YP.localities.future <- extract(pg2_10.future>=tr2_10, new.Yucca_plant.coords)[,-1]
+predict.YP.localities.future1 <- na.omit(predict.YP.localities.future)
+sum(predict.YP.localities.future1)
+
+sum((predict.YM.localities.now==0)&(predict.YM.localities.future1)) # in the future but not in the past
+sum((predict.YM.localities.now==1)&(predict.YM.localities.future1==0)) # 57
+
+sum((predict.YP.localities.now1==0)&(predict.YP.localities.future1)) # in the future but not in the past
+sum((predict.YP.localities.now1==1)&(predict.YP.localities.future1==0)) # 57
+```
+The data above suggest further that there will be an increase in population in 2060 - 2018. The yucca moth population increases from 163 to 196 and the plant population increase from 3618 to 3909. Normally when we think of climate change and its impacts we assume a decrease in populations however form what is modeled, we can say that the mutualistic relationship of yucca moth and plant will continue to thrive in the future. There has been extinctions (6 populations and 52 for yucca moth and plant respectively) but there has also been 52 new populations. The differences in the population increase and new population is confusing (52 vs 291). There should be more work done on the prediction of population increase.
+
